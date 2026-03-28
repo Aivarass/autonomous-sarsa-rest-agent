@@ -20,7 +20,7 @@ This agent learns those dependencies on its own. It starts with no knowledge of 
 
 The agent builds and sends API requests, observes the response, updates its policy, and gradually learns which sequences of calls lead to defects. No reward shaping, no domain knowledge baked in.
 
-## Why Python
+## About implementation
 
 This is a port from the [original Java implementation](https://github.com/Aivarass/sarsa-rest-bug-hunter) to demonstrate the same approach in Python. Both versions produce equivalent results. The neural network, SARSA loop, state representation, and property-based test generation are all implemented from scratch.
 
