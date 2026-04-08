@@ -19,7 +19,7 @@ class SarsaRestTester:
     def __init__(self):
         self.discovery_counter = 0
         # Main
-        self.EPISODES = 1000000
+        self.EPISODES = 100000
         self.LOG_EVERY = 10000
         self.SEED = 1234
         self.STEP_LIMIT = 35
