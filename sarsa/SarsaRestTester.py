@@ -1,5 +1,7 @@
+import json
 import random
 import time
+from datetime import datetime
 
 import numpy as np
 import requests
@@ -14,8 +16,9 @@ from sarsa.strategy.StrategyBuilder import StrategyBuilder
 class SarsaRestTester:
 
     def __init__(self):
+        self.discovery_counter = 0
         # Main
-        self.EPISODES = 70000
+        self.EPISODES = 1000000
         self.LOG_EVERY = 10000
         self.SEED = 1234
         self.STEP_LIMIT = 35
@@ -65,6 +68,8 @@ class SarsaRestTester:
         self.execute_sarsa(self.EPISODES)
 
         self.export_chart_data()
+
+
 
 
     def execute_sarsa(self, episodes):
@@ -141,6 +146,7 @@ class SarsaRestTester:
                 self.hidden_bug_hits_this_window = 0
 
     def execute_episode(self, rng, episode_num):
+        api_history = []
         strategy = StrategyBuilder()
         self.last_item_id = None
         self.last_price_id = None
@@ -158,6 +164,7 @@ class SarsaRestTester:
         strategy.reset()
 
         for step in range(self.STEP_LIMIT):
+            response = None
             self.all_action_counts[current_action] = self.all_action_counts.get(current_action, 0) + 1
 
             executed_combo = None
@@ -170,6 +177,12 @@ class SarsaRestTester:
                 self.pbt.last_discount_id = int(self.last_discount_id) if self.last_discount_id is not None else None
 
                 response = self.execute_with_strategy(strategy)
+                if response is not None:
+                    api_history.append({
+                        "method": str(strategy.get_http_type()).split(".")[-1],
+                        "endpoint": "/" + str(strategy.get_endpoint()).split(".")[-1].lower(),
+                        "status": response.status_code
+                    })
                 self.execute_count += 1
             else:
                 current_state = strategy.apply_action(current_action, current_state)
@@ -185,23 +198,24 @@ class SarsaRestTester:
                 strategy.reset()
                 next_state.reset_after_execute()
 
-            reward = self.calculate_reward(response, executed_combo, episode_num)
+            reward, discovery = self.calculate_reward(response, executed_combo, episode_num, api_history, current_state)
+
             episode_reward += reward
+
+            if discovery is not None:
+                print(json.dumps(discovery))
 
             if reward > 0:
                 bugs_found += 1
 
             terminal = bool(step == self.STEP_LIMIT - 1)
 
-            self.ann.sarsa_update(current_state.scale(), current_action, reward, next_state.scale(), next_action, terminal, self.ALPHA, self.GAMMA)
+            self.ann.sarsa_update(current_state.scale(), current_action, reward, next_state.scale(), next_action, terminal, self.GAMMA, self.ALPHA)
 
             current_state = next_state
             current_action = next_action
 
         return [episode_reward, bugs_found]
-
-
-
 
 
     def execute_with_strategy(self, strategy_builder):
@@ -269,7 +283,7 @@ class SarsaRestTester:
         return response
 
     def put_item(self, payload, endpoint):
-        target_id = self.get_endpoint_target(endpoint)
+        target_id = str(self.get_endpoint_target(endpoint))
 
         response = requests.put(
             self.BASE_URL + endpoint.name.lower() + "/" + target_id,
@@ -279,7 +293,7 @@ class SarsaRestTester:
         return response
 
     def patch_item(self, payload, endpoint):
-        target_id = self.get_endpoint_target(endpoint)
+        target_id = str(self.get_endpoint_target(endpoint))
 
         response = requests.patch(
             self.BASE_URL + endpoint.name.lower() + "/" + target_id,
@@ -305,22 +319,43 @@ class SarsaRestTester:
         except (IndexError, KeyError, ValueError):
             pass
 
-    def calculate_reward(self, response, executed_combo, episode_num):
+    def calculate_reward(self, response, executed_combo, episode_num, api_history, current_state):
         if response is None:
-            return -0.15
+            return -0.15, None
         if response.status_code != 500:
-            return 0
+            return 0, None
 
+        reward = 10
         if executed_combo is not None:
             self.bugs_by_combo[executed_combo] = self.bugs_by_combo.get(executed_combo, 0) + 1
             self.unique_bug_combos.add(executed_combo)
-
             if executed_combo.startswith("DELETE+POINTS+"):
                 self.hidden_bug_count += 1
                 self.hidden_bug_hits_this_window += 1
                 self.log_hidden_bug_discovery(executed_combo, episode_num)
 
-        return 10
+        discovery = self.build_discovery(
+            api_history, episode_num, reward, response.status_code,
+            {
+                "hasValidItemId": current_state.has_valid_item_id,
+                "hasValidPriceId": current_state.has_valid_price_id,
+                "hasValidDiscountId": current_state.has_valid_discount_id,
+                "hasValidPointsId": current_state.has_valid_points_id
+            }
+        )
+        return reward, None
+
+    def build_discovery(self, api_history, episode_num, reward, status_code, state_features):
+        self.discovery_counter += 1
+        return {
+            "discovery_id": str(self.discovery_counter).zfill(3),
+            "timestamp": datetime.now().isoformat(timespec="seconds"),
+            "episode": episode_num,
+            "api_sequence": api_history,
+            "final_status": status_code,
+            "reward": reward,
+            "state_features": state_features
+        }
 
     def get_endpoint_target(self, endpoint):
         if endpoint == Endpoint.ITEMS:

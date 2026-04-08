@@ -60,7 +60,8 @@ class QNetwork5:
             raise ValueError("No valid actions available")
 
         if rng.random() < epsilon:
-            return rng.choice(valid_indices)
+            idx = rng.randint(0, len(valid_indices) - 1)
+            return int(valid_indices[idx])
 
         q_values = self.forward(state)
         q_values[~valid_mask] = float('-inf')
