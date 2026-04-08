@@ -5,6 +5,7 @@ from datetime import datetime
 
 import numpy as np
 import requests
+from eval_pipeline.quality_report import QualityReport
 
 from ann.QNetwork import QNetwork5
 from sarsa.generator.PayloadGenerator import PayloadGenerator, Endpoint, Intensity, Strategy, Field
@@ -63,11 +64,14 @@ class SarsaRestTester:
         self.hidden_bug_count = 0
         self.hidden_bug_hits_this_window = 0
 
+        self.report = QualityReport(discoveries=[])
+
         self.ann = QNetwork5(self.ANN_INPUTS, self.ANN_NEURONS, self.ANN_ACTIONS)
 
         self.execute_sarsa(self.EPISODES)
 
         self.export_chart_data()
+
 
 
 
@@ -198,7 +202,7 @@ class SarsaRestTester:
                 strategy.reset()
                 next_state.reset_after_execute()
 
-            reward, discovery = self.calculate_reward(response, executed_combo, episode_num, api_history, current_state)
+            reward, discovery = self.calculate_reward(response, executed_combo, episode_num, api_history, current_state, step)
 
             episode_reward += reward
 
@@ -319,20 +323,29 @@ class SarsaRestTester:
         except (IndexError, KeyError, ValueError):
             pass
 
-    def calculate_reward(self, response, executed_combo, episode_num, api_history, current_state):
+    def calculate_reward(self, response, executed_combo, episode_num, api_history, current_state, step):
         if response is None:
             return -0.15, None
         if response.status_code != 500:
             return 0, None
 
         reward = 10
-        if executed_combo is not None:
-            self.bugs_by_combo[executed_combo] = self.bugs_by_combo.get(executed_combo, 0) + 1
-            self.unique_bug_combos.add(executed_combo)
-            if executed_combo.startswith("DELETE+POINTS+"):
-                self.hidden_bug_count += 1
-                self.hidden_bug_hits_this_window += 1
-                self.log_hidden_bug_discovery(executed_combo, episode_num)
+        discovery = None
+
+        if executed_combo is None:
+            return reward, discovery
+
+        is_new = executed_combo not in self.unique_bug_combos
+        self.bugs_by_combo[executed_combo] = self.bugs_by_combo.get(executed_combo, 0) + 1
+        self.unique_bug_combos.add(executed_combo)
+
+        if executed_combo.startswith("DELETE+POINTS+"):
+            self.hidden_bug_count += 1
+            self.hidden_bug_hits_this_window += 1
+            self.log_hidden_bug_discovery(executed_combo, episode_num)
+
+        if not is_new:
+            return reward, discovery
 
         discovery = self.build_discovery(
             api_history, episode_num, reward, response.status_code,
@@ -343,7 +356,32 @@ class SarsaRestTester:
                 "hasValidPointsId": current_state.has_valid_points_id
             }
         )
-        return reward, None
+
+        if discovery is None:
+            return reward, discovery
+
+        evaluation, summary = self.report.execute_single_pipeline(
+            discovery, terminal=(step == self.STEP_LIMIT - 1)
+        )
+
+        if evaluation is None or evaluation['llm'] is None:
+            reward = 1
+            return reward, discovery
+
+        reward = self.adjust_reward(evaluation['llm'])
+        return reward, discovery
+
+    def adjust_reward(self, judge_result):
+        print(judge_result)
+        if not judge_result.is_genuine_bug:
+            return -1
+
+        severity_rewards = {
+            'low': 3,
+            'medium': 6,
+            'high': 10
+        }
+        return severity_rewards.get(judge_result.severity, 10)
 
     def build_discovery(self, api_history, episode_num, reward, status_code, state_features):
         self.discovery_counter += 1
