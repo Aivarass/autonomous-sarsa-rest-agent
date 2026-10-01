@@ -13,20 +13,25 @@ from sarsa.model.State import State
 from sarsa.strategy.HttpType import HttpType
 from sarsa.strategy.StrategyBuilder import StrategyBuilder
 
+# executed_combo is built as f"{http_type}+{endpoint}+{strategy}+{field}", which renders the
+# enums as "HttpType.DELETE+Endpoint.POINTS+...". Build the prefix the same way so the two
+# cannot drift apart again.
+HIDDEN_BUG_COMBO_PREFIX = f"{HttpType.DELETE}+{Endpoint.POINTS}+"
+
 
 class SarsaRestTester:
 
     def __init__(self):
         self.discovery_counter = 0
         # Main
-        self.EPISODES = 100000
+        self.EPISODES = 50000
         self.LOG_EVERY = 10000
         self.SEED = 1234
         self.STEP_LIMIT = 35
 
         # Hyper params
-        self.EPSILON = 0.01
-        self.GAMMA = 1.0
+        self.EPSILON = 0.025
+        self.GAMMA = 0.99
         self.ALPHA = 0.01
 
         # ANN
@@ -63,6 +68,10 @@ class SarsaRestTester:
         self.hidden_bug_first_episode = -1
         self.hidden_bug_count = 0
         self.hidden_bug_hits_this_window = 0
+        # A hot combo can fire tens of thousands of times. Log the first N hits, then every
+        # Nth, so the discovery JSON stays readable. hidden_bug_count stays exact regardless.
+        self.HIDDEN_BUG_LOG_FIRST_N = 10
+        self.HIDDEN_BUG_LOG_EVERY = 1000
 
         self.report = QualityReport(discoveries=[])
 
@@ -329,26 +338,23 @@ class SarsaRestTester:
         if response.status_code != 500:
             return 0, None
 
-        reward = 10
-        discovery = None
-
         if executed_combo is None:
-            return reward, discovery
+            return 1, None
 
-        is_new = executed_combo not in self.unique_bug_combos
         self.bugs_by_combo[executed_combo] = self.bugs_by_combo.get(executed_combo, 0) + 1
+        is_new = executed_combo not in self.unique_bug_combos
         self.unique_bug_combos.add(executed_combo)
 
-        if executed_combo.startswith("DELETE+POINTS+"):
+        if executed_combo.startswith(HIDDEN_BUG_COMBO_PREFIX):
             self.hidden_bug_count += 1
             self.hidden_bug_hits_this_window += 1
             self.log_hidden_bug_discovery(executed_combo, episode_num)
 
         if not is_new:
-            return reward, discovery
+            return 0, None
 
         discovery = self.build_discovery(
-            api_history, episode_num, reward, response.status_code,
+            api_history, episode_num, 0, response.status_code,
             {
                 "hasValidItemId": current_state.has_valid_item_id,
                 "hasValidPriceId": current_state.has_valid_price_id,
@@ -358,15 +364,14 @@ class SarsaRestTester:
         )
 
         if discovery is None:
-            return reward, discovery
+            return 1, None
 
         evaluation, summary = self.report.execute_single_pipeline(
             discovery, terminal=(step == self.STEP_LIMIT - 1)
         )
 
         if evaluation is None or evaluation['llm'] is None:
-            reward = 1
-            return reward, discovery
+            return 1, discovery
 
         reward = self.adjust_reward(evaluation['llm'])
         return reward, discovery
@@ -381,7 +386,8 @@ class SarsaRestTester:
             'medium': 6,
             'high': 10
         }
-        return severity_rewards.get(judge_result.severity, 10)
+        base = severity_rewards.get(judge_result.severity, 10)
+        return base * judge_result.novelty
 
     def build_discovery(self, api_history, episode_num, reward, status_code, state_features):
         self.discovery_counter += 1
@@ -409,18 +415,32 @@ class SarsaRestTester:
         if not self.hidden_bug_discovered:
             self.hidden_bug_discovered = True
             self.hidden_bug_first_episode = episode_num
-            print()
-            print("╔════════════════════════════════════════════════════════════════╗")
-            print("║              HIDDEN BUG DISCOVERED!                          ║")
-            print("╠════════════════════════════════════════════════════════════════╣")
-            print(f"║  Episode:    {episode_num:,}")
-            print(f"║  Combo:      {combo}")
-            print("║  Condition:  DELETE POINTS → 500 (ancestor price < 0)          ║")
-            print("║  Chain:      ITEM → PRICE(neg) → DISCOUNT → POINTS → DELETE   ║")
-            print("╚════════════════════════════════════════════════════════════════╝")
-            print()
-        else:
-            print(f"🐛 HIDDEN BUG HIT #{self.hidden_bug_count} @ Episode {episode_num:,} | {combo} | HTTP 500")
+            self.print_hidden_bug_banner(combo, episode_num)
+        elif (self.hidden_bug_count <= self.HIDDEN_BUG_LOG_FIRST_N
+                or self.hidden_bug_count % self.HIDDEN_BUG_LOG_EVERY == 0):
+            print(f"🐛 HIDDEN BUG HIT #{self.hidden_bug_count:,} @ Episode {episode_num:,} "
+                  f"| {combo} | HTTP 500")
+
+    @staticmethod
+    def print_hidden_bug_banner(combo, episode_num):
+        title = "HIDDEN BUG DISCOVERED!"
+        rows = [
+            f"Episode:    {episode_num:,}",
+            f"Combo:      {combo}",
+            "Condition:  DELETE POINTS → 500 (ancestor price < 0)",
+            "Chain:      ITEM → PRICE(neg) → DISCOUNT → POINTS → DELETE",
+        ]
+        # Width follows the longest line, so a long combo widens the box instead of
+        # spilling past its right border.
+        width = max(len(title), max(len(row) for row in rows)) + 4
+        print()
+        print("╔" + "═" * width + "╗")
+        print("║" + title.center(width) + "║")
+        print("╠" + "═" * width + "╣")
+        for row in rows:
+            print("║" + "  " + row.ljust(width - 2) + "║")
+        print("╚" + "═" * width + "╝")
+        print()
 
     def init_state(self):
         return State(0,0, 0,0, 0, 0,0, 0, 0, 0, 0, 0, 0, 0)
