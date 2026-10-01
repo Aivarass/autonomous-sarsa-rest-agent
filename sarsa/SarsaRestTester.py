@@ -5,6 +5,7 @@ from datetime import datetime
 
 import numpy as np
 import requests
+from eval_pipeline.judge_result import JudgeResult
 from eval_pipeline.quality_report import QualityReport
 
 from ann.QNetwork import QNetwork5
@@ -38,6 +39,10 @@ class SarsaRestTester:
         self.ANN_INPUTS = State.FEATURE_COUNT
         self.ANN_ACTIONS = StrategyBuilder.get_action_count()
         self.ANN_NEURONS = 16
+
+
+        self.USE_LLM_JUDGE = False
+        self.local_pattern_counts = {}
 
         # URL
         self.BASE_URL = "http://localhost:8080/api/"
@@ -73,7 +78,9 @@ class SarsaRestTester:
         self.HIDDEN_BUG_LOG_FIRST_N = 10
         self.HIDDEN_BUG_LOG_EVERY = 1000
 
-        self.report = QualityReport(discoveries=[])
+        self.report = QualityReport(discoveries=[], use_judge=self.USE_LLM_JUDGE)
+        if not self.USE_LLM_JUDGE:
+            print("LLM judge DISABLED: local count-based novelty, no API calls.")
 
         self.ann = QNetwork5(self.ANN_INPUTS, self.ANN_NEURONS, self.ANN_ACTIONS)
 
@@ -366,14 +373,21 @@ class SarsaRestTester:
         if discovery is None:
             return 1, None
 
-        evaluation, summary = self.report.execute_single_pipeline(
-            discovery, terminal=(step == self.STEP_LIMIT - 1)
-        )
+        if self.USE_LLM_JUDGE:
+            evaluation, summary = self.report.execute_single_pipeline(
+                discovery, terminal=(step == self.STEP_LIMIT - 1)
+            )
+            if evaluation is None or evaluation['llm'] is None:
+                return 1, discovery
+            result = evaluation['llm']
+        else:
+            # Same rule-check gate the judge path goes through, so duplicates are filtered
+            # identically and still pay the +1 below.
+            if self.report.execute_rules_based_check(discovery) is None:
+                return 1, discovery
+            result = self.local_assessment(discovery)
 
-        if evaluation is None or evaluation['llm'] is None:
-            return 1, discovery
-
-        reward = self.adjust_reward(evaluation['llm'])
+        reward = self.adjust_reward(result)
         return reward, discovery
 
     def adjust_reward(self, judge_result):
@@ -388,6 +402,19 @@ class SarsaRestTester:
         }
         base = severity_rewards.get(judge_result.severity, 10)
         return base * judge_result.novelty
+
+    def local_assessment(self, discovery):
+        if not any(discovery["state_features"].values()):
+            return JudgeResult(False, 0.4, "low", "validation",
+                               "no valid resource id held", 0.0)
+
+        failing = discovery["api_sequence"][-1]
+        key = (failing["method"], failing["endpoint"])
+        seen = self.local_pattern_counts.get(key, 0)
+        self.local_pattern_counts[key] = seen + 1
+        return JudgeResult(True, 0.9, "high", "error_handling",
+                           f"{failing['method']} {failing['endpoint']} -> {failing['status']}",
+                           round(1.0 / (1 + seen), 3))
 
     def build_discovery(self, api_history, episode_num, reward, status_code, state_features):
         self.discovery_counter += 1

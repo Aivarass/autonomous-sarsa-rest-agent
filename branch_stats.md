@@ -160,6 +160,149 @@ in meaningful volume.
 
 ---
 
+## ⭐ Controlled ablation — LLM judge vs local count decay (5 v 5 COMPLETE)
+
+All 10 runs: 16 neurons, γ=0.99, ε=0.025, 50k episodes, seed 1234, clean DB before each.
+**Only the novelty term differs.** Rule checks, duplicate filtering (+1), repeat-zeroing,
+false-positive penalty (−1) and the severity base (10) are identical in both arms.
+
+Local stand-in: false positive if no `state_feature` is set; otherwise
+`novelty = 1/(1 + times this (method, endpoint) has failed before)`.
+
+### Bottom line at 5 v 5
+
+**One metric separates the arms, and it is weaker than earlier runs suggested. Four do not.**
+
+| | **Judge (n=5)** | **No judge (n=5)** | Comparison | Significant? |
+|---|---|---|---|---|
+| **Hidden-bug hits** | median **174** | median **1** | **174× on medians** | **marginal** — U = 22/25, exact p = 0.024 |
+| **Found the bug at all** | **5 / 5** | 4 / 5 | — | no (Fisher p = 1.0) |
+| Unique combos | mean 144.6, median 136 | mean 142.2, median 118 | **1.02×** | **no** (Welch t = 0.06) |
+| Combos per 100k executes | 20.4 | **30.0** | **0.68× — judge behind** | no |
+| Hits per DELETE issued | 0.208 – 40.0% | 0 – **5.50%** | **ranges overlap** | no |
+| Earliest find | ep 3,910 | ep **6,900** | ranks interleave | no |
+
+### ⚠ CORRECTIONS — no-judge #5 overturned three more claims
+
+No-judge #5 (**248 combos, 270 hits, first @ 6,900**) is the strongest single run of the campaign on
+two metrics and it dismantles most of what the judge arm appeared to own:
+
+1. **"Disjoint hit ranges" is DEAD.** No-judge #5 scored **270 hits**, beating judge #1 (174),
+   judge #2 (7) and judge #3 (6). Judge [6, 23,830] and no-judge [0, 270] overlap heavily.
+   Mann-Whitney fell from U = 25/25 (p = 0.008) to **U = 22/25, p = 0.024**.
+2. **"Disjoint hits-per-DELETE" is DEAD.** No-judge #5 hit **5.50%** of its DELETEs, above three of
+   five judge runs. The volume-controlled metric no longer separates the arms either.
+3. **The combo gap is GONE.** 144.6 vs 142.2, Welch t = **0.06**. Not a trend, not noise-limited —
+   the arms are indistinguishable on discovery volume.
+4. **Efficiency is now clearly against the judge**: 20.4 vs 30.0 combos per 100k.
+5. **Early detection is NOT judge-only** (already corrected at no-judge #4; now reinforced —
+   no-judge #5 is the **2nd earliest find of all 10 runs**).
+
+### ⚠ Multiple comparisons: the one surviving result does not survive correction
+
+Across this ablation I tested at least five metrics (hit count, detection rate, combos, efficiency,
+hits-per-DELETE) plus first-find timing. A Bonferroni threshold at α = 0.05 over 5 tests is
+**α = 0.01**. The hit-count result at **p = 0.024 does not clear it**.
+
+Stated plainly: **this ablation did not establish that the LLM judge beats a free count-based
+novelty proxy.** It produced one marginal rank-test result on hit magnitude that would not survive
+correction for the number of comparisons made, and nothing else.
+
+### Per-run results — all 10 runs
+
+| | J#1 | J#2 | J#3 | J#4 | J#5 | N#1 | N#2 | N#3 | N#4 | **N#5** |
+|---|---|---|---|---|---|---|---|---|---|---|
+| **Unique combos** | 229 | 43 | 136 | 183 | 132 | 118 | 97 | 83 | 165 | **248** |
+| **Hidden-bug hits** | 174 | 7 | 6 | 23,830 | 427 | 1 | 0 | 1 | 3 | **270** |
+| First hit (ep) | **3,910** | 45,751 | 42,509 | 9,797 | 14,317 | 48,367 | — | 49,463 | 10,980 | **6,900** |
+| Combos per 100k | 28.0 | 8.6 | 17.6 | 28.5 | 19.2 | 20.2 | 11.5 | 7.5 | 51.9 | **58.8** |
+| Total executes | 818,698 | 498,255 | 770,614 | 641,571 | 686,963 | 584,188 | 842,642 | 1,104,037 | 318,212 | 422,006 |
+| Assessed | 108 | 15 | 60 | 80 | 67 | 37 | 44 | 35 | 86 | 110 |
+| Genuine rate | 97.2% | 53.3% | 91.7% | 91.2% | 86.6% | 73.0% | 90.9% | 88.6% | 91.9% | 91.8% |
+| False-positive rate | 2.8% | 46.7% | 8.3% | 8.8% | 13.4% | 27.0% | 9.1% | 11.4% | 8.1% | 8.2% |
+| Mean novelty | 0.135 | 0.338 | 0.202 | 0.149 | 0.195 | 0.348 | 0.332 | 0.491 | 0.267 | 0.284 |
+| Discovery reward | +260 | +48 | +182 | +205 | +169 | +165 | +182 | +196 | +283 | **+416** |
+| `/items` share | 97.3% | 48.4% | 99.1% | 91.8% | 53.3% | 97.0% | 99.6% | 99.7% | 98.9% | **72.7%** |
+| `/points` share | 1.70% | **51.2%** | 0.18% | 7.91% | **43.2%** | 0.27% | 0.03% | 0.10% | 0.39% | **26.0%** |
+| DELETE share | 10.2% | 0.074% | 0.373% | **28.4%** | 0.155% | 4.15% | 0.073% | 0.132% | 3.14% | 1.16% |
+| Hits per DELETE | 0.208% | 1.90% | 0.209% | 13.07% | **40.0%** | 0.004% | 0% | 0.069% | 0.030% | **5.50%** |
+| Wall time | 5,102s | 325s | 1,600s | 619s | 590s | 349s | 732s | 792s | 1,215s | 2,142s |
+
+### No-judge #5 reached `/points` — the last judge-only behaviour falls
+
+Until this run, every no-judge run stayed pinned to `/items` at 97–99.7%, and `/points` traffic
+never exceeded 0.39%. No-judge #5 put **26.0% of its traffic on `/points`** (and only 72.7% on
+`/items`). The local count-based proxy reached the target endpoint on its own.
+
+Endpoint reach by arm, `/points` share: judge 0.18 / 1.70 / 7.91 / 43.2 / 51.2 % —
+no-judge 0.03 / 0.10 / 0.27 / 0.39 / **26.0** %. Overlapping.
+
+### Second-half collapse is the dominant failure mode in the no-judge arm (3 of 5)
+
+| Run | Windows 1–3 ratio | Windows 4–5 ratio | Combos in last 20k |
+|---|---|---|---|
+| No-judge #4 | 36.7 / 30.6 / 4.8% | 7.4 / 11.3% | 8 of 165 |
+| **No-judge #5** | 33.4 / 43.0 / 30.5% | **6.2 / 7.6%** | **7 of 248** |
+| Judge #4 (inverse) | **5.3** / 42.3 / 43.5% | 46.6 / 45.5% | recovered, 36 of 183 |
+
+No-judge #5 earned 241 of its 248 combos in the first 30k episodes, then sat at 6–8% execute ratio
+and ≈ −5.0 average reward (floor −5.25) for the last 20k. Its 58.8 combos/100k is an artefact of
+that collapse: the execute denominator shrank far faster than the combo numerator. **Do not read
+the no-judge efficiency lead as a real advantage** — it is division by a collapsed denominator,
+the same caveat recorded for no-judge #4.
+
+Judge #4 remains the only run that collapsed and then recovered.
+
+### Variance — the arms are now statistically indistinguishable in spread too
+
+| Arm | Combo range | sd | Hit range |
+|---|---|---|---|
+| Judge | 43 – 229 | 69.2 | 6 – 23,830 |
+| No judge | 83 – 248 | 66.8 | 0 – 270 |
+
+### What survives, stated conservatively
+
+1. **Judge runs hit the bug harder when they hit it.** Median 174 vs 1. Marginal on a rank test
+   (p = 0.024), and **not significant after multiple-comparison correction**.
+2. **Detection rate 5/5 vs 4/5.** Fisher exact p = 1.0 — no evidence of a difference.
+3. **Nothing else.** Combos tied (t = 0.06); efficiency favours no-judge; hits-per-DELETE ranges
+   overlap; early detection interleaves; both arms reach `/points`; both arms lock onto one verb;
+   both arms can collapse into learned helplessness.
+4. **The judge costs money and wall time for no measured discovery benefit.** 330 API calls across
+   five runs to match a free local heuristic on every volume metric.
+
+### Caveat that still cuts against the judge
+
+The ablation is **favourable to the local arm** by construction: its per-endpoint reset pays a first
+`DELETE /points` a novelty of 1.0 (reward 10), where the judge paid its own first hits 0.0–0.2
+(reward 0–2). The local proxy had a 5–10× better incentive for the target. That explains *why* it
+competes — it is not a flaw in the comparison, it is the comparison's finding: **a cheap
+well-shaped local reward is enough.**
+
+### Honest README framing
+
+> A controlled 5-vs-5 ablation (50,000 episodes per run, clean database, identical reward plumbing,
+> only the novelty term swapped) found **no measurable discovery-volume advantage** for the LLM judge
+> over a free count-based novelty heuristic: 145 vs 142 unique bug combos (Welch t = 0.06), and the
+> local heuristic was ahead on combos per execute. Judge runs found the hidden 5-step bug in 5/5 runs
+> versus 4/5, and hit it harder when they did (median 174 vs 1 hits), but that difference is marginal
+> (rank test p = 0.024) and does not survive correction for the number of metrics compared. The
+> judge's measured contribution is interpretability — severity, category and root cause per finding —
+> not exploration efficiency.
+
+Do **not** claim the judge improves discovery count, efficiency, endpoint coverage, verb discipline,
+early detection, or hit rate. The data contradicts all six.
+
+### What would actually settle it
+
+- n = 5 per arm with 4,000× within-arm spread cannot resolve a 1.02× effect. A real test needs
+  ~20 runs per arm, or a lower-variance target than "hits on one bug".
+- Better: hold the reward identical and measure the judge **only** on what it uniquely produces —
+  false-positive filtering accuracy and root-cause quality against the 45-example golden set —
+  rather than on agent exploration, where a free heuristic matches it.
+
+---
+
 ## 16 neurons
 
 2026-10-01. Complete, exit 0.
@@ -376,8 +519,21 @@ The agent reduced to a GET_ALL loop.
    decay changes achieved this on a clean DB.
 
 2. **ε = 0.025 is the biggest win found** — 4.5× the combos, 2.5× the hidden-bug hits, and the
-   earliest detection, from the *smallest* network. It works by raising DELETE usage to 10.21%, not
-   by flooding `/points`. Sweep ε further (0.02 / 0.03 / 0.04) before touching anything else.
+   earliest detection, from the *smallest* network. Sweep ε further (0.02 / 0.03 / 0.04).
+
+3. **Decay vs none buys sustained execution. The LLM's only measurable edge is the hidden bug.**
+   Flat +10 collapses to a 0% execute ratio; a free local count decay fixes that. At 3/3 per arm the
+   judge shows no significant advantage on combos (136 vs 99, Welch t = 0.67) or efficiency
+   (18.1 vs 13.1 per 100k). It does find the hidden bug in 3/3 runs vs 2/3, with non-overlapping hit
+   ranges ([6, 174] vs [0, 1]) — a 94x gap.
+
+4. **Verb lock-in happens in both arms, all ten runs.** Every run concentrated on one verb, and the
+   judge does not prevent it. Nor does it uniquely reach /points: no-judge #5 put 26.0% of traffic
+   there, inside the judge arm's 0.18-51.2% range. Endpoint reach overlaps between arms.
+
+5. **Severity is not perfectly constant after all.** Judge #2 produced one `medium` verdict and one
+   `high` on a false positive. Rare, but the "severity is binary and collinear" claim needs the
+   qualifier.
 
 3. **γ must stay long.** The gated execute action makes this a multi-step credit-assignment
    problem; γ=0.1 collapses the agent to 0.04% execute rate and 99.96% of the reward floor. Do not
